@@ -155,18 +155,12 @@ app.PrintPlain(str(len(df_fitted)))
 
 #Create a new index
 df_fitted = df_fitted.reset_index(drop=True)
-
-
-
 #GET 1ST TWO TEST VALUES 0 - 204
-genTest_df = df_fitted.iloc[50:51]
-
+genTest_df = df_fitted.iloc[205:206]
 #GENERATOR SETS
 # RESET ALL GENERATOR OUTPUTS
 for gen in syn_machines:
     gen.pgini = 0
-
-
 for gen in stat_machines:
     gen.pgini = 0
 
@@ -254,46 +248,69 @@ for index, row in genTest_df.iterrows():
             total_generation = sum(genSet)
             app.PrintPlain("The generation percentage is" +str(total_generation))
             
-#Loading DF:
-# =============================================================================
-# 
-#      
-#         if (col == "Wind_perc"):
-#             wind_value = gen_row[col] #get value of onshore wind
-#             wind_inj = (wind_value/100) * abs(total_load) #get percentage of wind injected
-#             #create set with wind machines
-#             wind_mac.clear()
-#             for stat_gen in stat_machines:
-#                 if "Wind" in stat_gen.loc_name:
-#                     if stat_gen.outserv == 0:
-#                         wind_mac.append(stat_gen) #add wind generator to the list
-#             wind_rating = sum(stat_gen.Pnom for stat_gen in wind_mac)
-#             app.PrintPlain("Wind rating is" + str(wind_rating))
-#             for stat_gen in wind_mac:
-#                 act_pow = (stat_gen.Pnom / wind_rating) * wind_inj
-#                 app.PrintPlain("Active wind loop is" + str(act_pow))
-#                 stat_gen.pgini = act_pow
-#             wind_act_pow = sum(stat_gen.pgini for stat_gen in wind_mac)
-#             app.PrintPlain("The total active power for wind is" + str(wind_act_pow))
-#             
-#         if (col=="Solar_perc"):
-#             solar_value = gen_row[col] #get value of onshore wind
-#             solar_inj = (solar_value/100) * abs(total_load)
-#             #create set with wind machines
-#             solar_mac.clear()
-#             for stat_gen in stat_machines:
-#                 if "Solar" in stat_gen.loc_name:
-#                     if stat_gen.outserv == 0:
-#                         solar_mac.append(stat_gen) #add wind generator to the list
-#             solar_rating = sum(stat_gen.Pnom for stat_gen in solar_mac)
-#             app.PrintPlain("Solar rating is" + str(solar_rating))
-#             for stat_gen in solar_mac:
-#                 act_pow = (stat_gen.Pnom / solar_rating) * solar_inj
-#                 app.PrintPlain("Active solar loop is" + str(act_pow))
-#                 stat_gen.pgini = act_pow
-#             solar_act_pow = sum(stat_gen.pgini for stat_gen in solar_mac)
-#             app.PrintPlain("The total active power for solar is" + str(solar_act_pow))
-# =============================================================================
-             
+            
 total_gen = sum(gen.pgini for gen in syn_machines) + sum(gen.pgini for gen in stat_machines)#total generation
 app.PrintPlain("TOTAL GENERATION= " + str(total_gen))
+
+#PART 2, RUN SIMULATION
+
+#RUN LOAD FLOW
+
+#CALC METHOD:
+ldf.iopt_net = 0 #SET AC LOAD FLOW BALANCED POSITIVE SEQUENCE
+#Active power regulation:
+ldf.iPST_at = 1 #automatic adjustment of phase shifters
+ldf.iopt_plim = 1 #consider active power limits
+#Voltage and reactive power regulation
+ldf.iopt_at = 1 #consider automatic tap adjustment of transformers
+ldf.iopt_asht = 1 #consider automatic tap adjustment of shunt capacitor
+ldf.iopt_lim = 1 #consider reactive power limits
+#Temperature dependency of lines and cables
+ldf.iopt_tem = 0 #lines and cables at 20 degrees
+#load options
+ldf.iopt_pq = 1 #consider voltage dependency of loads
+
+#execute load flow
+ldf.Execute()
+
+#RUN INITIAL CONDITIONS
+#RUN INITIAL CONDITIONS
+initCond.tstop = 15 #set time to 15 seconds
+test = initCond.Execute()
+#Test to see if initial conditions ran
+if test == 0:
+    app.PrintPlain("Initial Conditions: SUCCESS")
+else:
+    app.PrintPlain("Initial Conditions didn't work")
+
+#RUN SIMULATION
+run.tstop = 15.0 # set stop time to 15 seconds
+run.iopt_store = 1  #ensure the full storage
+run.Execute() #execute run
+
+#Export results
+export.Execute()
+df = pd.read_csv("results_file.csv")
+app.PrintPlain(df)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

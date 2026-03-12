@@ -1,0 +1,101 @@
+  \subsection{Example display items}
+    This is an example of providing a cross-reference to \autoref{sec:methods}. Similarly, this is an example cross-reference to a sub-subsection, \autoref{sec:content}.
+    
+    This is an example of adding references \cite{ref:jCAS09,ref:jCAS09a,ref:jCAS10}. If you want the author name, or similar, you can use: \citeauthor*{ref:jCAS09} in \citeyear{ref:jCAS09} introduced a really good idea. (This is for when you primarily use numbered citations, but occasionally need an author's name. If using author names as the reference everywhere, change style=ieee in the biblatex setup above to whatever reference style you want, and then just use the cite command.)
+
+    For adding \emph{emphasis} use the emph command. In general, try to avoid texttt, textit, textbf and similar commands --- these don't tell the document \emph{why} the style is being changed, and this information is needed for screen readers. In contrast, emph gives meaning to the change in format. By default it uses italics, but you can change the style if you want to. 
+    
+    Here are two example tables. \autoref{table:example_tabularx} is an example using tabularx to fix the size of the table to be the same width as the page, with columns that auto-wrap if the text is too long. \autoref{table:example_tabular} is an example using tabular where the width of the table is set by its contents. It may go beyond the width of the page.
+    \begin{table}
+      \centering
+      \caption[Short caption for list of tables]{Example table. Full caption goes here. Often a short caption in [] is used as well as the main caption to keep the list of figures tidy; it gets messy if there are long captions going over more than one line.}
+      \label{table:example_tabularx}
+      \begin{tabularx}{\linewidth}{ZZZZZ}
+        \toprule
+        \multirow{2}{*}{Participant} & \multicolumn{2}{c}{Number / \%} & \multicolumn{2}{c}{Duration / \%} \\
+                                     & Prime dresses & Non-prime dresses & Prime dresses & Non-prime dresses \\
+	  \otoprule
+        1  & 33.33 & 33.91 & 20.83 & 18.42 \\
+        2  & 13.04 & 17.50 & 04.93 & 07.62 \\
+        3  & 22.73 & 20.10 & 13.00 & 08.20 \\
+        4  & 31.34 & 21.88 & 10.57 & 11.09 \\
+        5  & 08.47 & 19.32 & 03.04 & 09.73 \\
+        \hline
+        Mean & 16.4 & 16.5 & 07.8 & 07.5 \\
+        Standard deviation & 09.7 & 06.6 & 05.4 & 03.3 \\
+        \bottomrule
+      \end{tabularx}
+    \end{table}
+
+    \begin{table}
+      \centering
+      \caption[Short caption for list of tables]{Example table. Full caption goes here. Often a short caption in [] is used as well as the main caption to keep the list of figures tidy; it gets messy if there are long captions going over more than one line.}
+      \label{table:example_tabular}
+      \begin{tabular}{ccccc}
+        \toprule
+        \multirow{2}{*}{Participant} & \multicolumn{2}{c}{Number / \%} & \multicolumn{2}{c}{Duration / \%} \\
+                                     & Prime dresses & Non-prime dresses & Prime dresses & Non-prime dresses \\
+	  \otoprule
+        1  & 33.33 & 33.91 & 20.83 & 18.42 \\
+        2  & 13.04 & 17.50 & 04.93 & 07.62 \\
+        3  & 22.73 & 20.10 & 13.00 & 08.20 \\
+        4  & 31.34 & 21.88 & 10.57 & 11.09 \\
+        5  & 08.47 & 19.32 & 03.04 & 09.73 \\
+        \hline
+        Mean & 16.4 & 16.5 & 07.8 & 07.5 \\
+        Standard deviation & 09.7 & 06.6 & 05.4 & 03.3 \\
+        \bottomrule
+      \end{tabular}
+    \end{table}
+  
+    This is an example equation in text \(2\sin{\omega t}\). Below is an example of a displayed equation. See \autoref{equ:example} for info.
+    \begin{equation}
+        a^{2} + b^{2} = c^{2} \label{equ:example}
+    \end{equation}
+
+    Note that numbers are displayed differently in the text depending on how they are entered. Compare for example 123456 vs.\ \(123456\) vs.\ \num{123456}. Entering numbers directly, such as 1955, should be used for \emph{text mode} numbers. That is, those representing text (dates, page numbers, and similar). Numbers representing maths, or variables or similar, should be entered inside \textbackslash( \textbackslash) or \lstinline{\num} so they are typeset in the same way as they appear in an equation. (This requires a bit of discipline, but helps ensure consistent use of number styles throughout.) \lstinline{\num} is provided by the \lstinline{siunitx} package. The display it provides can be customised if wanted. Documentation is at \url{https://texdoc.org/serve/siunitx/0}.
+
+    This is an example of a quote in text \textcquote{ref:jCAS10}{The electroencephalogram (EEG) is a classic noninvasive method for measuring a person's brainwaves}. Below is an example of a displayed quote. Both are using the csquotes package.
+    \begin{displaycquote}{ref:jCAS10}
+      Electrodes are placed on the scalp to detect the microvolt-sized signals that result from synchronized neuronal activity within the brain.
+    \end{displaycquote}
+
+    This is an example figure. See \autoref{fig:uom_logo} for more details. Alternatively, can put multiple figures into a subfigure environment, for example \autoref{fig:uom_logo_in_subfig}, or \autoref{fig:subfig_b} to cite a particular sub-figure.
+    \begin{figure}
+      \centering
+      \includegraphics[alt={Put short description for screen readers here},width=0.3\textwidth,keepaspectratio=true]{uom_logo.pdf}
+      \caption[Short caption for list of figures]{Example figure. Full caption goes here. Often a short caption in [] is used as well as the main caption to keep the list of figures tidy; it gets messy if there are long captions going over more than one line.}
+      \label{fig:uom_logo}
+    \end{figure} 
+
+    \begin{figure}
+      \centering
+      \begin{subfigure}{0.3\linewidth}
+        \includegraphics[alt={Put short description for screen readers here},width=\textwidth,keepaspectratio=true]{uom_logo.pdf}
+        \caption{}
+        \label{fig:subfig_a}
+      \end{subfigure}
+      \begin{subfigure}{0.3\linewidth}
+        \includegraphics[alt={Put short description for screen readers here},width=\textwidth,keepaspectratio=true]{uom_logo.pdf}
+        \caption{}
+        \label{fig:subfig_b}
+      \end{subfigure}
+      \begin{subfigure}{0.3\linewidth}
+        \includegraphics[alt={Put short description for screen readers here},width=\textwidth,keepaspectratio=true]{uom_logo.pdf}
+        \caption{}
+        \label{fig:subfig_c}
+     \end{subfigure}
+     \caption{Three copies of the University logo. (a) Copy one. (b) Copy two. (c) Copy three.}
+     \label{fig:uom_logo_in_subfig}
+    \end{figure}
+
+    An example code listing is given in \autoref{code:example}. See \url{https://www.overleaf.com/learn/latex/Code_listing} for more examples of how to display code. Code in the body of the text can be included as \lstinline{for} or \lstinline{while} or \lstinline{main}.
+
+    \begin{lstlisting}[language=Python, caption={My code example}, label={code:example}]
+import numpy as np
+    
+def my_filter(in,f_obj):
+    y = filter(f_obj,in)
+    
+    return y
+    \end{lstlisting}

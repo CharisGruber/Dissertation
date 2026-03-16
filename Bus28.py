@@ -9,6 +9,7 @@ import powerfactory as pf
 import pandas as pd
 import numpy as np
 import matplotlib as plt
+from scipy.signal import find_peaks as fp
 
 #ASSIGN A STUDY CASE
 app = pf.GetApplication()
@@ -38,15 +39,16 @@ genSet = []
 #EMPTY DF
 df_cap = pd.DataFrame()
 
-#DISCONNECT REDUNDANT MACHINES
+#SET REDUNDANT MACHINES TO ZERO
 for stat_gen in stat_machines:
     if "Battery" in stat_gen.loc_name:
-        stat_gen.pgini = 0
-        stat_gen.outserv = 1
-for trans in transformer:
-    if "Battery" in trans.loc_name:
-        trans.outserv =1
-# ADD COLUMNS TO DF 
+        stat_gen.pgini = 0 #set reactive and active power for BATT = 0
+        stat_gen.qgini = 0
+        
+    if "Marine" in stat_machines:
+        stat_gen.pgini = 0 #set reactive and active power for MAR = 0
+        stat_gen.qgini = 0
+#ADD COLUMNS TO DF 
 for gen in syn_machines: #iterate thriugh sync machines
     if gen.outserv == 0: #if connected
         # Resolve energy type
@@ -153,19 +155,22 @@ df_fitted.to_excel("Fitted Gen DF.xlsx")
 #check number of possible samples
 app.PrintPlain(str(len(df_fitted)))
 
+stability_results = []
+
 #Create a new index
 df_fitted = df_fitted.reset_index(drop=True)
-#GET 1ST TWO TEST VALUES 0 - 204
-genTest_df = df_fitted.iloc[205:206]
+#GET 1ST TEST VALUES 0 - 204
+genTest_df = df_fitted.iloc[:]
 #GENERATOR SETS
-# RESET ALL GENERATOR OUTPUTS
-for gen in syn_machines:
-    gen.pgini = 0
-for gen in stat_machines:
-    gen.pgini = 0
+# RESET ALL GENERATOR OUTPUTS to make active power 0
+
 
 #GET FIRST ROW OF GENTEST_DF, set
 for index, row in genTest_df.iterrows():
+    for gen in syn_machines:
+        gen.pgini = 0
+    for gen in stat_machines:
+        gen.pgini = 0
     genSet.clear()
     gen_row = genTest_df.loc[index] #The generation row
     for col in genTest_df.columns:
@@ -249,56 +254,92 @@ for index, row in genTest_df.iterrows():
             app.PrintPlain("The generation percentage is" +str(total_generation))
             
             
-total_gen = sum(gen.pgini for gen in syn_machines) + sum(gen.pgini for gen in stat_machines)#total generation
-app.PrintPlain("TOTAL GENERATION= " + str(total_gen))
+    total_gen = sum(gen.pgini for gen in syn_machines) + sum(gen.pgini for gen in stat_machines)#total generation
+    app.PrintPlain("TOTAL GENERATION= " + str(total_gen))
 
 #PART 2, RUN SIMULATION
 
 #RUN LOAD FLOW
+    
+    #CALC METHOD:
+    ldf.iopt_net = 0 #SET AC LOAD FLOW BALANCED POSITIVE SEQUENCE
+    #Active power regulation:
+    ldf.iPST_at = 0 #automatic adjustment of phase shifters
+    ldf.iopt_plim = 1 #consider active power limits
+    #Voltage and reactive power regulation
+    ldf.iopt_at = 1 #consider automatic tap adjustment of transformers
+    ldf.iopt_asht = 1 #consider automatic tap adjustment of shunt capacitor
+    ldf.iopt_lim = 1 #consider reactive power limits
+    #Temperature dependency of lines and cables
+    ldf.iopt_tem = 0 #lines and cables at 20 degrees
+    #load options
+    ldf.iopt_pq = 1 #consider voltage dependency of loads
+    
+    ldf.iPbalancing = 4
+    
+    #execute load flow
+    ldf.Execute()
+    
+    #RUN INITIAL CONDITIONS
+    #RUN INITIAL CONDITIONS
+    initCond.tstop = 15 #set time to 15 seconds
+    test = initCond.Execute()
+    #Test to see if initial conditions ran
+    if test == 0:
+        app.PrintPlain("Initial Conditions: SUCCESS")
+    else:
+        app.PrintPlain("Initial Conditions didn't work")
+    
+    #RUN SIMULATION
+    run.tstop = 15.0 # set stop time to 15 seconds
+    run.iopt_store = 1  #ensure the full storage
+    run.Execute() #execute run
+    
+    #GET RESULTS
+    
+    #GET RID OF DIVERGENT RUNS HERE
+    if (run.Execute()) != 0:
+        app.PrintPlain("ERROR! RMS SIMULATION DID NOT CONVERGE!")
+    else:
+        app.PrintPlain("SUCESS! RMS SIMULATION CONVERGED!")
+    
+    #Export results
+    export.Execute()
+    result_df = pd.read_csv("results_file.csv")
+    result_df = result_df.rename(columns=result_df.iloc[0]).iloc[1:].reset_index(drop=True)
+    app.PrintPlain(result_df)
+    #Next read data from dataframe to ensure convergence
+    #convert data into values
+    time = pd.to_numeric(result_df["Time in s"].values)
+    freq = pd.to_numeric(result_df["Electrical Frequency in Hz"].values)
+    peaks, _ = fp(freq) #find peaks in frequency response
+    #If the peaks grow, the frequency response is unstable.
+    peak_freq = freq[peaks] #Returns the frequency values
+    peak_time = time[peaks]
+    app.PrintPlain("Peaks are: " + str(peak_freq)) #RETURNS INDICIES OF PEAKS
+    peak_freq = peak_freq[1:] #Remove first peak
+    peak_time = peak_time[1:] #Remove first peak
+    # fit linear trend for a lot of peaks
+    if len(peak_freq) > 2:
+        slope = np.polyfit(peak_time, peak_freq, 1)[0]
+    else:
+        slope = 0
+    
+    
+    if slope > 0.0005:
+        stability = 0
+    else:
+        stability = 1
+    
+    app.PrintPlain("Peak slope:" + str(slope) +"Stability is: " +str(stability))
+    stability_results.append(stability)
 
-#CALC METHOD:
-ldf.iopt_net = 0 #SET AC LOAD FLOW BALANCED POSITIVE SEQUENCE
-#Active power regulation:
-ldf.iPST_at = 1 #automatic adjustment of phase shifters
-ldf.iopt_plim = 1 #consider active power limits
-#Voltage and reactive power regulation
-ldf.iopt_at = 1 #consider automatic tap adjustment of transformers
-ldf.iopt_asht = 1 #consider automatic tap adjustment of shunt capacitor
-ldf.iopt_lim = 1 #consider reactive power limits
-#Temperature dependency of lines and cables
-ldf.iopt_tem = 0 #lines and cables at 20 degrees
-#load options
-ldf.iopt_pq = 1 #consider voltage dependency of loads
-
-#execute load flow
-ldf.Execute()
-
-#RUN INITIAL CONDITIONS
-#RUN INITIAL CONDITIONS
-initCond.tstop = 15 #set time to 15 seconds
-test = initCond.Execute()
-#Test to see if initial conditions ran
-if test == 0:
-    app.PrintPlain("Initial Conditions: SUCCESS")
-else:
-    app.PrintPlain("Initial Conditions didn't work")
-
-#RUN SIMULATION
-run.tstop = 15.0 # set stop time to 15 seconds
-run.iopt_store = 1  #ensure the full storage
-run.Execute() #execute run
-
-#Export results
-export.Execute()
-df = pd.read_csv("results_file.csv")
-app.PrintPlain(df)
-
-
-
-
-
-
-
+app.PrintPlain(stability_results)
+df_fitted["Stability"] = stability_results
+df_fitted_stable = df_fitted.copy()
+for index, row in df_fitted_stable.iterrows():
+    if row["Stability"] == 0:
+        df_fitted_stable.drop(row, axis=0, inplace=True)
 
 
 

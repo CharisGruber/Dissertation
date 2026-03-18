@@ -1,0 +1,394 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Mar  4 15:22:10 2026
+
+@author: chari
+"""
+
+#IMPORTS
+import powerfactory as pf
+import pandas as pd
+import numpy as np
+import matplotlib as plt
+from scipy.signal import find_peaks as fp
+
+#ASSIGN A STUDY CASE
+app = pf.GetApplication()
+
+#Get PowerFactory commands
+ldf = app.GetFromStudyCase("ComLdf") #Load flow
+initCond = app.GetFromStudyCase("ComInc") #initial conditions
+run = app.GetFromStudyCase("ComSim") #Run simualtion
+results = app.GetFromStudyCase("ElmRes") #Results variable
+export = app.GetFromStudyCase("ComRes") #Export results
+
+#Get data objects
+syn_machines = app.GetCalcRelevantObjects("*.ElmSym")
+stat_machines = app.GetCalcRelevantObjects("*.ElmGenstat")
+transformer = app.GetCalcRelevantObjects("*.ElmTr2")
+mac_type = app.GetCalcRelevantObjects("*.TypSym")
+trans_type = app.GetCalcRelevantObjects("*.TypTr2")
+loads = app.GetCalcRelevantObjects("*.ElmLod")
+
+#EMPTY SETS
+syncSet = []
+imports =[]
+machine_types = []
+wind_mac = []
+solar_mac = []
+genSet = []
+
+#EMPTY DF
+df_cap = pd.DataFrame()
+
+#SET REDUNDANT MACHINES TO ZERO
+for stat_gen in stat_machines:
+    if "Battery" in stat_gen.loc_name:
+        stat_gen.pgini = 0
+        stat_gen.qgini = 0
+        
+    if "Marine" in stat_gen.loc_name:
+        stat_gen.pgini = 0
+        stat_gen.qgini = 0
+
+#ADD COLUMNS TO DF 
+for gen in syn_machines:
+    if gen.outserv == 0:
+        
+        if "Sync Condenser" in gen.loc_name:
+            energyName = "Sync Condenser"
+        else:
+            energyName = gen.loc_name.split()[-1]
+
+        if energyName not in df_cap.columns:
+            df_cap[energyName] = None
+
+        syncSet.clear()
+
+        for item in mac_type:
+            if "Storage" in energyName:
+                energyName = "PS"
+            if energyName.lower() in item.loc_name.lower():
+                syncSet.append(item)
+
+        if not syncSet:
+            continue
+
+        if "PS" in str(energyName):
+            energyName = "Storage"
+
+        total_cap = sum(item.sgn for item in syncSet)
+        total_ac_cap = sum((item.sgn * item.cosn) for item in syncSet)
+
+        df_cap.loc[0, energyName] = total_cap
+        df_cap.loc[1, energyName] = total_ac_cap
+
+
+#STATIC MACHINES (FIXED SECTION)
+for gen in stat_machines:
+    if gen.outserv == 0:
+        
+        name = gen.loc_name.lower()
+
+        if ("hvdc" in name) or ("link" in name):
+            energyName = "Imports"
+        elif "wind" in name:
+            energyName = "Wind"
+        elif "solar" in name:
+            energyName = "Solar"
+        else:
+            energyName = gen.loc_name.split()[-1]
+
+        if energyName not in df_cap.columns:
+            df_cap[energyName] = None
+
+        syncSet.clear()
+
+        for item in stat_machines:
+            name_item = item.loc_name.lower()
+
+            if energyName == "Imports":
+                if ("hvdc" in name_item) or ("link" in name_item):
+                    if item.outserv == 0:
+                        syncSet.append(item)
+            else:
+                if energyName.lower() in name_item:
+                    if item.outserv == 0:
+                        syncSet.append(item)
+
+        if not syncSet:
+            continue
+
+        total_cap = sum(item.sgn for item in syncSet)
+        total_ac_cap = sum((item.sgn * item.cosn) for item in syncSet)
+
+        df_cap.loc[0, energyName] = total_cap
+        df_cap.loc[1, energyName] = total_ac_cap
+
+
+#Calculate total load
+total_load = 0        
+for load in loads:
+    if load.outserv == 0:
+        total_load += load.plini
+
+app.PrintPlain(total_load)
+
+#Find maximum active power energy share
+df_cap.loc[2] = (df_cap.loc[1]*100/total_load) 
+
+# Print results
+app.PrintPlain(df_cap)
+app.PrintPlain(df_cap.loc[0])
+app.PrintPlain(df_cap.loc[1])
+app.PrintPlain(df_cap.loc[2])
+
+
+#Read generator values
+gen_df = pd.read_csv("Historic GB data.csv")
+
+app.PrintPlain("Total generation rows = " + str(len(gen_df)))
+
+#CRITERIA OF MAXIMUM ENERGY PERCENTAGE
+limits = {
+    f"{col.upper()}_perc": df_cap.loc[2, col]
+    for col in df_cap.columns
+    if pd.notna(df_cap.loc[2, col])
+}
+
+df_fitted = gen_df.copy()
+mask = pd.Series(True, index=df_fitted.index)
+
+for col, limit in limits.items():
+    if col in df_fitted.columns:
+        mask &= df_fitted[col] <= limit
+
+df_fitted = df_fitted[mask]
+df_fitted = df_fitted[df_fitted["COAL"] == 0]
+
+df_fitted.to_csv("Fitted Gen DF 36.csv") 
+df_fitted.to_excel("Fitted Gen DF 36.xlsx")
+
+app.PrintPlain(str(len(df_fitted)))
+
+stability_results = []
+
+df_fitted = df_fitted.reset_index(drop=True)
+
+genTest_df = df_fitted.iloc[100:101]
+
+
+for index, row in genTest_df.iterrows():
+    
+    for gen in syn_machines:
+        gen.pgini = 0
+        
+    for gen in stat_machines:
+        gen.pgini = 0
+
+    genSet.clear()
+    gen_row = genTest_df.loc[index]
+
+    for col in genTest_df.columns:
+
+        if (col.endswith("_perc")):
+
+            energyName = col.replace("_perc","").capitalize()
+
+            if energyName in ["Generation"]:
+                continue
+
+            perc_value = gen_row[col]
+            genSet.append(perc_value)
+
+            tot_gen = (perc_value/100) * abs(total_load)
+            app.PrintPlain("Total power injection" + str(tot_gen))
+
+
+            #IMPORTS (FIXED)
+            imports.clear()
+
+            if energyName == "Imports":
+
+                for gen in stat_machines:
+                    name = gen.loc_name.lower()
+
+                    if ("hvdc" in name) or ("link" in name):
+                        if gen.outserv == 0:
+                            imports.append(gen)
+
+                if len(imports) == 0:
+                    continue
+
+                total_rating = sum(gen.Pnom for gen in imports)
+
+                if (total_rating < tot_gen):
+                    app.PrintPlain("OH NO Too much Injected Power!")
+                    break
+
+                for gen in imports:
+                    actPow = (gen.Pnom/total_rating)*tot_gen
+                    gen.pgini = actPow
+
+                continue
+
+
+            #WIND + SOLAR
+            machine_types.clear()
+
+            if energyName in ["Wind", "Solar"]:
+
+                for gen in stat_machines:
+                    if energyName.lower() in gen.loc_name.lower():
+                        if gen.outserv == 0:
+                            machine_types.append(gen)
+
+                if len(machine_types) == 0:
+                    continue
+
+                total_rating = sum(gen.Pnom for gen in machine_types)
+
+                if total_rating == 0:
+                    continue
+
+                for gen in machine_types:
+                    actPow = (gen.Pnom/total_rating) * tot_gen
+                    gen.pgini = actPow
+
+                continue
+
+
+            #SYNCHRONOUS
+            machine_types.clear()
+
+            for gen in syn_machines:
+                if energyName.lower() in gen.loc_name.lower():
+                    if gen.outserv == 0:
+                        machine_types.append(gen)
+
+            if len(machine_types) == 0:
+                continue
+
+            total_rating = sum(gen.Pnom for gen in machine_types)
+
+            if total_rating == 0:
+                continue
+
+            for gen in machine_types:
+                actPow = (gen.Pnom/total_rating) * tot_gen
+                gen.pgini = actPow
+
+
+    total_gen = sum(gen.pgini for gen in syn_machines) + sum(gen.pgini for gen in stat_machines)
+    app.PrintPlain("TOTAL GENERATION= " + str(total_gen))
+
+#PART 2, RUN SIMULATION
+
+#RUN LOAD FLOW
+    
+    #CALC METHOD:
+    ldf.iopt_net = 0 #SET AC LOAD FLOW BALANCED POSITIVE SEQUENCE
+    #Active power regulation:
+    ldf.iPST_at = 0 #automatic adjustment of phase shifters
+    ldf.iopt_plim = 1 #consider active power limits
+    #Voltage and reactive power regulation
+    ldf.iopt_at = 1 #consider automatic tap adjustment of transformers
+    ldf.iopt_asht = 1 #consider automatic tap adjustment of shunt capacitor
+    ldf.iopt_lim = 1 #consider reactive power limits
+    #Temperature dependency of lines and cables
+    ldf.iopt_tem = 0 #lines and cables at 20 degrees
+    #load options
+    ldf.iopt_pq = 1 #consider voltage dependency of loads
+    
+    ldf.iPbalancing = 4
+    
+    #execute load flow
+    lf_result = ldf.Execute()
+    if lf_result != 0:
+        stability_results.append(np.nan)
+        continue
+    
+    #RUN INITIAL CONDITIONS
+    #RUN INITIAL CONDITIONS
+    initCond.tstop = 20 #set time to 15 seconds
+    test = initCond.Execute()
+    #Test to see if initial conditions ran
+    if test == 0:
+        app.PrintPlain("Initial Conditions: SUCCESS")
+    else:
+        app.PrintPlain("Initial Conditions didn't work")
+        stability_results.append(np.nan)
+        continue
+    
+    #RUN SIMULATION
+    run.tstop = 20.0 # set stop time to 15 seconds
+    run.iopt_store = 1  #ensure the full storage
+    RMS = run.Execute() #execute run
+    
+    #GET RESULTS
+    
+    #GET RID OF DIVERGENT RUNS HERE
+    if (RMS != 0):
+        app.PrintPlain("ERROR! RMS SIMULATION DID NOT CONVERGE!")
+        stability_results.append(np.nan)
+        continue
+    else:
+        app.PrintPlain("SUCESS! RMS SIMULATION CONVERGED!")
+    
+    #Export results
+    export.Execute()
+    result_df = pd.read_csv("results_file.csv")
+    result_df = result_df.rename(columns=result_df.iloc[0]).iloc[1:].reset_index(drop=True)
+    app.PrintPlain(result_df)
+    #Next read data from dataframe to ensure convergence
+    #convert data into values
+    time = pd.to_numeric(result_df["Time in s"].values)
+    freq = pd.to_numeric(result_df["Electrical Frequency in Hz"].values)
+    peaks, _ = fp(freq) #find peaks in frequency response
+    troughs, _ = fp(-freq) #find troughs
+    extremes = np.sort(np.concatenate([peaks, troughs])) #returns index
+    extreme_time = time[extremes] #finds time extremes occur at
+    extreme_freq = freq[extremes] #finds frequency extremes occur at
+    
+    
+    #If the peaks grow, the frequency response is unstable.
+  
+    extreme_amp = np.abs(extreme_freq - 50) #gets amplitude deviation
+    app.PrintPlain("Peaks are: " + str(extreme_freq)) #RETURNS INDICIES OF PEAKS
+    extreme_amp = extreme_amp[2:] #Remove first peak
+    extreme_time = extreme_time[2:] #Remove first peak
+    
+    if len(extreme_amp) < 3:
+        
+        stability = 1  # assume stable
+        stability_results.append(stability)
+        continue
+
+    mid = len(extreme_amp) // 2
+    early_average = np.mean(extreme_amp[:mid])
+    late_average = np.mean(extreme_amp[mid:])
+
+    # max deviation
+    max_dev = np.max(extreme_amp)
+    # fit linear trend for a lot of peaks
+    if len(extreme_amp) > 2:
+        slope = np.polyfit(extreme_time, extreme_amp, 1)[0]
+    else:
+        slope = 0
+    
+    
+    
+    if (slope > 1E-05 or max_dev > 0.5 or early_average * 1.2 < late_average):
+        stability = 0
+    else:
+        stability = 1
+    
+    app.PrintPlain("Peak slope:" + str(slope) +"Stability is: " +str(stability))
+    stability_results.append(stability)
+
+app.PrintPlain(stability_results) #Print stability results on powerfactory
+df_fitted_stable = df_fitted.copy() #copy
+df_fitted_stable["Stability"] = stability_results #add stability results to column
+df_fitted_stable.to_csv("Stability Results 36.csv")
+new_df = df_fitted_stable[df_fitted_stable["Stability"] == 1]
+app.PrintPlain(new_df)

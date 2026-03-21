@@ -45,7 +45,7 @@ for stat_gen in stat_machines:
         stat_gen.pgini = 0 #set reactive and active power for BATT = 0
         stat_gen.qgini = 0
         
-    if "Marine" in stat_machines:
+    if "Marine" in stat_gen.loc_name:
         stat_gen.pgini = 0 #set reactive and active power for MAR = 0
         stat_gen.qgini = 0
 #ADD COLUMNS TO DF 
@@ -128,16 +128,10 @@ app.PrintPlain("Total generation rows = " + str(len(gen_df)))
 
 #CRITERIA OF MAXIMUM ENERGY PERCENTAGE
 limits = {
-    "HYDRO_perc": 2.584773,
-    "STORAGE_perc": 1.432173,
-    "GAS_perc": 71.064955,
-    "NUCLEAR_perc": 11.074902,
-    "BIOMASS_perc": 5.497144,
-    "OTHER_perc": 4.161784,
-    "WIND_perc": 70.581048,
-    "IMPORTS_perc": 33.321613,   # HVDC treated as imports
-    "SOLAR_perc": 4.736517,
-    }
+    f"{col.upper()}_perc": df_cap.loc[2, col]
+    for col in df_cap.columns
+    if pd.notna(df_cap.loc[2, col])
+}
 df_fitted = gen_df.copy() #Create copies of a dataframes
 mask = pd.Series(True, index=df_fitted.index) #create a bit mask of 1s
 
@@ -156,6 +150,11 @@ df_fitted.to_excel("Fitted Gen DF.xlsx")
 app.PrintPlain(str(len(df_fitted)))
 
 stability_results = []
+load_converge = []
+init_converge = []
+RMS_converge = []
+final_frequency = []
+ldf_iterations = []
 
 #Create a new index
 df_fitted = df_fitted.reset_index(drop=True)
@@ -181,7 +180,7 @@ for index, row in genTest_df.iterrows():
             perc_value = gen_row[col] #get percentage value
             genSet.append(perc_value) #add to check perc sum
             tot_gen = (perc_value/100) * abs(total_load) #find total generated in MW
-            app.PrintPlain("Total power injection" + str(tot_gen)) #This works
+           # app.PrintPlain("Total power injection" + str(tot_gen)) #This works
             
             #HANDLE IMPORTS
             imports.clear()
@@ -201,7 +200,7 @@ for index, row in genTest_df.iterrows():
                     actPow = (gen.Pnom/total_rating)*tot_gen
                     gen.pgini = actPow
                 import_act_pow = sum(gen.pgini for gen in imports)
-                app.PrintPlain("The total active power for imports is" + str(import_act_pow))
+               # app.PrintPlain("The total active power for imports is" + str(import_act_pow))
                 continue
             
             #HANDLE WIND AND SOLAR
@@ -215,19 +214,19 @@ for index, row in genTest_df.iterrows():
                 if len(machine_types) == 0:
                     continue
                 total_rating = sum((gen.Pnom) for gen in machine_types) 
-                app.PrintPlain("Total synch rating for wind or solar is" + str(total_rating))#Sum machine rating
+                #app.PrintPlain("Total synch rating for wind or solar is" + str(total_rating))#Sum machine rating
                 
                 #check total ratings added correctly
                 if total_rating == 0:
                     continue
                 for gen in machine_types:
                     actPow = (gen.Pnom/total_rating) * tot_gen
-                    app.PrintPlain("Active wind/solar loop is" + str(actPow))
+                    #app.PrintPlain("Active wind/solar loop is" + str(actPow))
                     gen.pgini = actPow #update active power
                 mac_act_pow = sum(gen.pgini for gen in machine_types)
-                app.PrintPlain("The total active power for machines is" + str(mac_act_pow))
+                #app.PrintPlain("The total active power for machines is" + str(mac_act_pow))
                 total_generation = sum(genSet)
-                app.PrintPlain("The generation percentage is" +str(total_generation))
+                #app.PrintPlain("The generation percentage is" +str(total_generation))
                 continue
             #SYNCHRONOUS MACHINES    
             machine_types.clear()
@@ -239,19 +238,19 @@ for index, row in genTest_df.iterrows():
             if len(machine_types) == 0:
                 continue
             total_rating = sum((gen.Pnom) for gen in machine_types) 
-            app.PrintPlain("Total synch rating is" + str(total_rating))#Sum machine rating
+            #app.PrintPlain("Total synch rating is" + str(total_rating))#Sum machine rating
             
             #check total ratings added correctly
             if total_rating == 0:
                 continue
             for gen in machine_types:
                 actPow = (gen.Pnom/total_rating) * tot_gen
-                app.PrintPlain("Active loop is" + str(actPow))
+                #app.PrintPlain("Active loop is" + str(actPow))
                 gen.pgini = actPow #update active power
             mac_act_pow = sum(gen.pgini for gen in machine_types)
-            app.PrintPlain("The total active power for machines is" + str(mac_act_pow))
+            #app.PrintPlain("The total active power for machines is" + str(mac_act_pow))
             total_generation = sum(genSet)
-            app.PrintPlain("The generation percentage is" +str(total_generation))
+            #app.PrintPlain("The generation percentage is" +str(total_generation))
             
             
     total_gen = sum(gen.pgini for gen in syn_machines) + sum(gen.pgini for gen in stat_machines)#total generation
@@ -277,30 +276,51 @@ for index, row in genTest_df.iterrows():
     
     ldf.iPbalancing = 4
     
-    #execute load flow
-    ldf.Execute()
+    #execute load flow and store results
+    lf_result = ldf.Execute()
     
-    #RUN INITIAL CONDITIONS
+    
+    if lf_result != 0:
+        
+        load_converge.append(int(0))
+        init_converge.append(np.nan)
+        RMS_converge.append(np.nan)
+        stability_results.append(np.nan)
+        continue
+    else:
+        load_converge.append(int(1))
+        
+        
+    
     #RUN INITIAL CONDITIONS
     initCond.tstop = 15 #set time to 15 seconds
     test = initCond.Execute()
     #Test to see if initial conditions ran
     if test == 0:
+        init_converge.append(int(1))
         app.PrintPlain("Initial Conditions: SUCCESS")
     else:
         app.PrintPlain("Initial Conditions didn't work")
+        init_converge.append(int(0))
+        RMS_converge.append(np.nan)
+        stability_results.append(np.nan)
+        continue
     
     #RUN SIMULATION
     run.tstop = 15.0 # set stop time to 15 seconds
     run.iopt_store = 1  #ensure the full storage
-    run.Execute() #execute run
+    RMS = run.Execute() #execute run
     
     #GET RESULTS
     
     #GET RID OF DIVERGENT RUNS HERE
-    if (run.Execute()) != 0:
+    if (RMS != 0):
         app.PrintPlain("ERROR! RMS SIMULATION DID NOT CONVERGE!")
+        RMS_converge.append(int(0))
+        stability_results.append(np.nan)
+        continue
     else:
+        RMS_converge.append(int(1))
         app.PrintPlain("SUCESS! RMS SIMULATION CONVERGED!")
     
     #Export results
@@ -313,45 +333,89 @@ for index, row in genTest_df.iterrows():
     time = pd.to_numeric(result_df["Time in s"].values)
     freq = pd.to_numeric(result_df["Electrical Frequency in Hz"].values)
     peaks, _ = fp(freq) #find peaks in frequency response
-    #If the peaks grow, the frequency response is unstable.
-    peak_freq = freq[peaks] #Returns the frequency values
-    peak_time = time[peaks]
-    app.PrintPlain("Peaks are: " + str(peak_freq)) #RETURNS INDICIES OF PEAKS
-    peak_freq = peak_freq[1:] #Remove first peak
-    peak_time = peak_time[1:] #Remove first peak
-    # fit linear trend for a lot of peaks
-    if len(peak_freq) > 2:
-        slope = np.polyfit(peak_time, peak_freq, 1)[0]
+    troughs, _ = fp(-freq) #find troughs
+    extremes = np.sort(np.concatenate([peaks, troughs])) #returns index
+    extreme_time = time[extremes] #finds time extremes occur at
+    extreme_freq = freq[extremes] #finds frequency extremes occur at
+    
+    
+    if len(extremes) > 4:
+    #If the peaks grow, the frequency response is unstable.  
+        extreme_amp = np.abs(extreme_freq - 50) #gets amplitude deviation
+        app.PrintPlain("Peaks are: " + str(extreme_freq)) #RETURNS INDICIES OF PEAKS
+        extreme_amp = extreme_amp[2:] #Remove first peak
+        extreme_time = extreme_time[2:] #Remove first peak
+        
+        if len(extreme_amp) < 3:
+            stability = 1  # assume stable
+            stability_results.append(stability)
+            continue
+    
+        mid = len(extreme_amp) // 2
+        early_average = np.mean(extreme_amp[:mid])
+        late_average = np.mean(extreme_amp[mid:])
+        
+        
+    
+        # max deviation
+        max_dev = np.max(extreme_amp)
+        # fit linear trend for a lot of peaks
+        if len(extreme_amp) > 2:
+            slope = np.polyfit(extreme_time, extreme_amp, 1)[0]
+        else:
+            slope = 0      
+        if (slope > 1E-05 or max_dev > 0.5 or early_average * 1.2 < late_average):
+            stability = 0
+        else:
+            stability = 1
+            settling_freq = np.mean(extreme_freq[-2:]) #find average of last two peaks
+            final_frequency.append(settling_freq)
     else:
-        slope = 0
-    
-    
-    if slope > 0.0005:
-        stability = 0
-    else:
-        stability = 1
-    
+        #-----------------------------------
+        #CASE 2: NON-OSCILLATORY (YOUR CASE)
+        #USE LAST 5% OF SIGNAL
+        window = int(len(freq) * 0.05)
+        freq_tail = freq[-window:]
+        time_tail = time[-window:] #start at 5% of the sig
+        
+            #SLOPE (checks settling)
+        if len(freq_tail) > 2:
+            slope = np.polyfit(time_tail, freq_tail, 1)[0]
+        else:
+            slope = 0
+        
+            #VARIATION (checks flatness)
+        variation = np.max(freq_tail) - np.min(freq_tail)
+        if variation < 0.05:
+            stability = 1
+        else:
+            stability = 0
+            #should be within 5% of steady state value
+            #FINAL VALUE
+        final_freq = np.mean(freq_tail)
+        final_frequency.append(final_freq)
+        
+        app.PrintPlain("Final freq: " + str(final_freq))
+        app.PrintPlain("Slope: " + str(slope))
+        app.PrintPlain("Variation: " + str(variation))
+        
+            #REALISTIC GRID THRESHOLDS
+        if (abs(slope) < 5e-2): #Less than five percent
+            stability = 1   # settled → stable
+        else:
+            stability = 0   # drifting → unstable
+        
     app.PrintPlain("Peak slope:" + str(slope) +"Stability is: " +str(stability))
     stability_results.append(stability)
+    
 
-app.PrintPlain(stability_results)
-df_fitted["Stability"] = stability_results
-df_fitted_stable = df_fitted.copy()
-for index, row in df_fitted_stable.iterrows():
-    if row["Stability"] == 0:
-        df_fitted_stable.drop(row, axis=0, inplace=True)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+app.PrintPlain(stability_results) #Print stability results on powerfactory
+df_fitted_stable = df_fitted.copy() #copy
+df_fitted_stable["Load Convergence"] = load_converge
+df_fitted_stable["Init Convergence"] = init_converge
+df_fitted_stable["RMS Convergence"] = RMS_converge
+df_fitted_stable["Stability"] = stability_results #add stability results to column
+df_fitted_stable.to_csv("Stability Results.csv")
+new_df = df_fitted_stable[df_fitted_stable["Stability"] == 1]
+app.PrintPlain(new_df)
 

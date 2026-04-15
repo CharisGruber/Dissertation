@@ -1,0 +1,558 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Mar  4 15:22:10 2026
+
+@author: chari
+"""
+#IMPORTS
+import powerfactory as pf
+import pandas as pd
+import numpy as np
+import matplotlib as plt
+from scipy.signal import find_peaks as fp
+
+#ASSIGN A STUDY CASE
+app = pf.GetApplication()
+
+#Get PowerFactory commands
+ldf = app.GetFromStudyCase("ComLdf") #Load flow
+initCond = app.GetFromStudyCase("ComInc") #initial conditions
+run = app.GetFromStudyCase("ComSim") #Run simualtion
+results = app.GetFromStudyCase("ElmRes") #Results variable
+export = app.GetFromStudyCase("ComRes") #Export results
+
+#Get data objects
+syn_machines = app.GetCalcRelevantObjects("*.ElmSym") #Sync generators
+stat_machines = app.GetCalcRelevantObjects("*.ElmGenstat") #stat generators
+transformer = app.GetCalcRelevantObjects("*.ElmTr2") #Transformer
+mac_type = app.GetCalcRelevantObjects("*.TypSym") #sync machine type
+trans_type = app.GetCalcRelevantObjects("*.TypTr2") #transformer type
+loads = app.GetCalcRelevantObjects("*.ElmLod") #get general loads
+buses = app.GetCalcRelevantObjects("*.ElmTerm")
+
+#EMPTY SETS
+syncSet = []
+imports =[]
+machine_types = []
+wind_mac = []
+solar_mac = []
+genSet = []
+coi_frequency = []
+gen_weights = {}
+#EMPTY DF
+df_cap = pd.DataFrame()
+
+# =============================================================================
+# for gen in mac_type:
+#     gen.sgn *= 1.2
+# for stat_gen in stat_machines:
+#     stat_gen.sgn *= 1.2
+# =============================================================================
+
+#SET REDUNDANT MACHINES TO ZERO
+for stat_gen in stat_machines:
+    if "Battery" in stat_gen.loc_name:
+        stat_gen.pgini = 0 #set reactive and active power for BATT = 0
+
+    if "Marine" in stat_gen.loc_name:
+        stat_gen.pgini = 0 #set reactive and active power for MAR = 0
+
+
+#ADD COLUMNS TO DF 
+for gen in syn_machines: #iterate thriugh sync machines
+    if gen.outserv == 0: #if connected
+        if "Sync Condenser" in gen.loc_name:
+            energyName = "Sync Condenser" #get Sync condenser name
+        else:
+            energyName = gen.loc_name.split()[-1]  # get last word
+        # Add empty column if not present in df
+        if energyName not in df_cap.columns:
+            df_cap[energyName] = None #add energy name column to df
+        # Reset syncSet for this iteration
+        syncSet.clear()
+        # Find matching machines
+        for item in mac_type:
+            if "Storage" in energyName:
+                energyName = "PS" #connect storage to PS (pump storage) 
+            if energyName.lower() in item.loc_name.lower():
+                syncSet.append(item)
+        # Skip if no matching units found
+        if not syncSet:
+            continue
+        # Total capacity
+        if "PS" in str(energyName): #change energy name back to storage
+            energyName = "Storage"
+        total_cap = sum(item.sgn for item in syncSet)
+        total_ac_cap = sum((item.sgn * item.cosn) for item in syncSet)
+        # Store capacity in first row
+        df_cap.loc[0, energyName] = total_cap #total apparent power for each energy type
+        df_cap.loc[1, energyName] = total_ac_cap #total active power rating
+        
+for gen in stat_machines:  #iterate through static machines
+    if gen.outserv == 0: #if machine is connected   
+        # Resolve energy type
+        if "HVDC" in gen.loc_name:
+            energyName = "HVDC" #make energy name HDVC
+        else:
+            energyName = gen.loc_name.split()[-1]  #get last word
+        # Add empty column if not present
+        if energyName not in df_cap.columns:
+            df_cap[energyName] = None #add energy name to dfcolumns
+        # Reset syncSet for this iteration
+        syncSet.clear()
+        # Find matching machines
+        for item in stat_machines:
+            if energyName.lower() in item.loc_name.lower():
+                syncSet.append(item) #add items of same energy name to list
+        # Skip if no matching units found
+        if not syncSet:
+            continue
+        # Total capacity
+        total_cap = sum(item.sgn for item in syncSet) #total apparent capacity
+        total_ac_cap = sum((item.sgn * item.cosn) for item in syncSet) #total active capacity
+        # Store capacity in first row
+        df_cap.loc[0, energyName] = total_cap #append capacity to first and sec row
+        df_cap.loc[1, energyName] = total_ac_cap
+#Calculate total load
+total_load = 0        
+for load in loads: #iterate through loads
+    if load.outserv == 0: #if connected
+        total_load += load.plini #sum loads
+app.PrintPlain(total_load)
+#Find maximum active power energy share for each energy type
+df_cap.loc[2] = (df_cap.loc[1]*100/total_load) 
+
+# Print results
+app.PrintPlain(df_cap)
+app.PrintPlain(df_cap.loc[0])
+app.PrintPlain(df_cap.loc[1])
+app.PrintPlain(df_cap.loc[2])
+
+#Read generator values
+gen_df = pd.read_csv("Historic GB data.csv")
+result_df = pd.read_csv("Zonal stability Results - Zone 1.csv")
+#gen_df.drop(gen_df.index[280512:], inplace=True) #drop years 2025
+new_df = gen_df[gen_df['DATETIME'].isin(result_df['DATETIME'])]
+
+app.PrintPlain("Total generation rows = " + str(len(gen_df)))
+#247675
+df_fitted = new_df.copy() #Create copies of a dataframes
+mask = pd.Series(True, index=df_fitted.index) #create a bit mask of 1s
+
+#CRITERIA OF MAXIMUM ENERGY PERCENTAGE
+limits = {
+    f"{col.upper()}_perc": df_cap.loc[2, col]
+    for col in df_cap.columns
+    if pd.notna(df_cap.loc[2, col])}
+df_fitted = new_df.copy() #Create copies of a dataframes
+mask = pd.Series(True, index=df_fitted.index) #create a bit mask of 1s
+
+for col, limit in limits.items(): #iterate through limits
+    if col in df_fitted.columns: #look for column in dataframe
+        mask &= df_fitted[col] <= limit #AND mask with values under the limit
+        #new mask made
+df_fitted = df_fitted[mask] #save df_fitted with mask
+df_fitted = df_fitted[df_fitted["COAL"] == 0] #remove rows with coal!=0
+
+#create new files with filtered results
+df_fitted.to_csv("Fitted Gen DF.csv") 
+df_fitted.to_excel("Fitted Gen DF.xlsx")
+
+#check number of possible samples
+app.PrintPlain(str(len(df_fitted)))
+#SETS
+zones = [ "Zone 01", "Zone 04", "Zone 08", "Zone 17", "Zone 28"]
+
+zone_gens = {zone: [] for zone in zones}
+zone_weights = {zone: {} for zone in zones}
+zone_total_weight = {zone: 0.0 for zone in zones}
+
+coi_nadir = {zone: [] for zone in zones}
+coi_rocof = {zone: [] for zone in zones}
+coi_final = {zone: [] for zone in zones}
+coi_stability = {zone: [] for zone in zones}
+coi_damping = {zone: [] for zone in zones}
+coi_recovery = {zone: [] for zone in zones}
+
+for gen in syn_machines:
+    if gen.outserv == 0:
+        try:
+            #term = gen.BB1  # terminal object
+            parent = gen.GetParent()
+
+            if parent.loc_name in zones:
+                zone_name = parent.loc_name
+
+                zone_gens[zone_name].append(gen)
+
+                H = gen.typ_id.h
+                S = gen.typ_id.sgn
+
+                weight = H * S
+
+                zone_weights[zone_name][gen] = weight
+                zone_total_weight[zone_name] += weight
+        except:
+            continue
+app.PrintPlain(zone_weights)
+freq_columns = []
+BB1 = app.GetCalcRelevantObjects("BB1.1.ElmTerm")
+#GET SELECTED ZONES
+for item in BB1:
+    zone = item.GetParent() #get folder of BB1
+    if zone.loc_name in zones:
+        freq_columns.append(item) #Get only desired measurement busbars
+
+
+load_converge = []
+init_converge = []
+RMS_converge = []
+Q_violation = []
+stability_results = {col: [] for col in freq_columns}
+final_frequency = {col: [] for col in freq_columns}
+nadir_result = {col: [] for col in freq_columns}
+RoCoF_result = {col: [] for col in freq_columns}
+min_rocof = {col: [] for col in freq_columns}
+recovery_times = {col: [] for col in freq_columns}
+damping = {col: [] for col in freq_columns}
+
+
+#Create a new index
+df_fitted = df_fitted.reset_index(drop=True)
+#TEST ALL VALUES
+genTest_df = df_fitted.iloc[100:101]
+#GENERATOR SETS
+#RESET ALL GENERATOR OUTPUTS to make active power 0
+df_fitted_stable = df_fitted[100:101].copy() #copy
+
+results.Clear()
+
+for zone in zones:
+    for gen in zone_weights[zone]:
+        results.AddVariable(gen, "n:fehz:bus1")
+
+# also add time
+results.AddVariable(results, "b:tnow")
+
+#GET FIRST ROW OF GENTEST_DF, set
+for index in range(len(genTest_df)):
+            
+    for gen in syn_machines:
+        if "DUMMY GEN" in gen.loc_name:
+            continue
+        else:
+            gen.pgini = 0
+    for gen in stat_machines:
+        gen.pgini = 0
+    genSet.clear()
+    gen_row = genTest_df.iloc[index] #The generation row
+    for col in genTest_df.columns:
+        if (col.endswith("_perc")):
+            energyName = col.replace("_perc","").capitalize()
+            if energyName in ["Generation"]: #skip wind and solar
+                continue
+            perc_value = gen_row[col] #get percentage value
+            genSet.append(perc_value) #add to check perc sum
+            tot_gen = (perc_value/100) * abs(total_load) #find total generated in MW
+            if "Gas" in energyName:
+                tot_gen -= 800 #get rid of 800 MW generation for gas
+           # app.PrintPlain("Total power injection" + str(tot_gen)) #This works
+            #HANDLE IMPORTS
+            imports.clear()
+            if energyName == ("Imports"):
+                for gen in stat_machines:
+                    if "DC Link" in gen.loc_name or "HVDC" in gen.loc_name:
+                        if gen.outserv == 0: #check out of service
+                            imports.append(gen) #make a list of imports machines
+                if len(imports) == 0:
+                    continue
+                total_rating = sum(gen.Pnom for gen in imports) #find total import rating
+                app.PrintPlain("Total Import rating =" + str(total_rating))
+                if (total_rating < tot_gen):
+                    app.PrintPlain("OH NO Too much Injected Power!")
+                    break
+                for gen in imports:
+                    actPow = (gen.Pnom/total_rating)*tot_gen
+                    gen.pgini = actPow
+                import_act_pow = sum(gen.pgini for gen in imports)
+               # app.PrintPlain("The total active power for imports is" + str(import_act_pow))
+                continue
+            
+            #HANDLE WIND AND SOLAR
+            machine_types.clear()
+            if energyName in ["Wind", "Solar"]:
+                for gen in stat_machines:
+                    if energyName.lower() in gen.loc_name.lower():
+                        if gen.outserv == 0:
+                            machine_types.append(gen)
+
+                if len(machine_types) == 0:
+                    continue
+                total_rating = sum((gen.Pnom) for gen in machine_types) 
+                #app.PrintPlain("Total synch rating for wind or solar is" + str(total_rating))#Sum machine rating
+                
+                #check total ratings added correctly
+                if total_rating == 0:
+                    continue
+                for gen in machine_types:
+                    actPow = (gen.Pnom/total_rating) * tot_gen
+                    #app.PrintPlain("Active wind/solar loop is" + str(actPow))
+                    gen.pgini = actPow #update active power
+                mac_act_pow = sum(gen.pgini for gen in machine_types)
+                #app.PrintPlain("The total active power for machines is" + str(mac_act_pow))
+                total_generation = sum(genSet)
+                #app.PrintPlain("The generation percentage is" +str(total_generation))
+                continue
+            #SYNCHRONOUS MACHINES    
+            machine_types.clear()
+            for gen in syn_machines:
+                if "DUMMY GEN" == gen.loc_name: #skip dummy generator
+                    gen.pgini = 800 #set to 800 MW
+                    continue
+                if energyName.lower() in gen.loc_name.lower():
+                    if gen.outserv == 0:
+                        machine_types.append(gen)
+
+            if len(machine_types) == 0:
+                continue
+            total_rating = sum((gen.Pnom) for gen in machine_types) 
+            #app.PrintPlain("Total synch rating is" + str(total_rating))#Sum machine rating
+            
+            #check total ratings added correctly
+            if total_rating == 0:
+                continue
+            for gen in machine_types:
+                actPow = (gen.Pnom/total_rating) * (tot_gen)
+                #app.PrintPlain("Active loop is" + str(actPow))
+                gen.pgini = actPow #update active power
+            mac_act_pow = sum(gen.pgini for gen in machine_types)
+            #app.PrintPlain("The total active power for machines is" + str(mac_act_pow))
+            total_generation = sum(genSet)
+            #app.PrintPlain("The generation percentage is" +str(total_generation))
+            
+            
+    total_gen = sum(gen.pgini for gen in syn_machines) + sum(gen.pgini for gen in stat_machines)#total generation
+    app.PrintPlain("TOTAL GENERATION= " + str(total_gen))
+    
+#PART 2, RUN SIMULATION
+
+#RUN LOAD FLOW
+    
+    #CALC METHOD:
+    ldf.iopt_net = 0 #SET AC LOAD FLOW BALANCED POSITIVE SEQUENCE
+    #Active power regulation:
+    ldf.iPST_at = 0 #automatic adjustment of phase shifters
+    ldf.iopt_plim = 1 #consider active power limits
+    #Voltage and reactive power regulation
+    ldf.iopt_at = 1 #consider automatic tap adjustment of transformers
+    ldf.iopt_asht = 1 #consider automatic tap adjustment of shunt capacitor
+    ldf.iopt_lim = 1 #consider reactive power limits
+    #Temperature dependency of lines and cables
+    ldf.iopt_tem = 0 #lines and cables at 20 degrees
+    #load options
+    ldf.iopt_pq = 1 #consider voltage dependency of loads
+    
+    ldf.iPbalancing = 4
+    
+    #execute load flow and store results
+    lf_result = ldf.Execute()    
+    violation = 0
+    gen_names = []
+    if lf_result != 0:
+        load_converge.append(int(0))
+        init_converge.append(np.nan)
+        RMS_converge.append(np.nan)
+        Q_violation.append(np.nan)
+    
+        for col in freq_columns:
+            stability_results[col].append(np.nan)
+            final_frequency[col].append(np.nan)
+            nadir_result[col].append(np.nan)
+            min_rocof[col].append(np.nan)
+            recovery_times[col].append(np.nan)
+            damping[col].append(np.nan)
+        continue
+    else:
+        load_converge.append(int(1))
+        for gen in (syn_machines + stat_machines):
+            q = gen.qgini #get dispatched reactive power
+            qmax = gen.q_max #get maximum limit
+            qmin = gen.q_min # get minimum limit
+            if (q>=qmax) or (q<=qmin):
+                gen_names.append(str(gen.loc_name))
+                violation+=1
+        Q_violation.append(int(violation))
+    app.PrintPlain(gen_names)
+        
+       
+    #RUN INITIAL CONDITIONS
+    initCond.tstop = 15 #set time to 15 seconds
+    test = initCond.Execute()
+    if test == 0:
+        init_converge.append(int(1))
+        app.PrintPlain("Initial Conditions: SUCCESS")
+        app.PrintPlain("Run: " + str(index)) #Print Index
+    else:
+        app.PrintPlain("Initial Conditions didn't work")
+        init_converge.append(int(0))
+        for col in freq_columns:
+            stability_results[col].append(np.nan)
+            final_frequency[col].append(np.nan)
+            nadir_result[col].append(np.nan)
+            min_rocof[col].append(np.nan)
+            recovery_times[col].append(np.nan)
+            damping[col].append(np.nan)
+        continue
+        
+    
+    #RUN SIMULATION
+    run.tstop = 15.0 # set stop time to 15 seconds
+    run.iopt_store = 1  #ensure the full storage
+    run.iopt_sim = 0
+    RMS = run.Execute() #execute run
+    
+    #GET RID OF DIVERGENT RUNS HERE
+    if (RMS != 0):
+        app.PrintPlain("ERROR! RMS SIMULATION DID NOT CONVERGE!")
+        RMS_converge.append(0)
+        for col in freq_columns:
+            stability_results[col].append(np.nan)
+            final_frequency[col].append(np.nan)
+            nadir_result[col].append(np.nan)
+            min_rocof[col].append(np.nan)
+            recovery_times[col].append(np.nan)
+            damping[col].append(np.nan)
+        continue
+    else:
+        RMS_converge.append(int(1))
+        app.PrintPlain("SUCESS! RMS SIMULATION CONVERGED!")
+
+        #PART 3 GET RESULTS
+    results.Load() #Loads results
+    num_res = results.GetNumberOfRows() #get number of results
+    app.PrintPlain("Number of result rows = " + str(num_res))
+    gen_col_idx = {}
+
+    for zone in zones:
+        for gen in zone_weights[zone]:
+            gen_col_idx[gen] = results.FindColumn(gen, "n:fehz:bus1")  
+        for gen, index in gen_col_idx.items():
+            if index < 0:
+                app.PrintPlain(" Missing freq column: " + str(gen.loc_name))
+            else:
+                app.PrintPlain("Found freq column: " + str(gen.loc_name))
+            app.PrintPlain("Column index = " + str(index))
+    # COMPUTE COI
+    zone_coi = {zone: np.zeros(num_res) for zone in zones}
+    
+    for i in range(num_res):
+        for zone in zones:
+            num = 0.0
+    
+            for gen, weight in zone_weights[zone].items():
+                f = results.GetValue(i, gen_col_idx[gen])[1]
+                num += weight * f
+    
+            if zone_total_weight[zone] != 0:
+                zone_coi[zone][i] = num / zone_total_weight[zone]
+            else:
+                zone_coi[zone][i] = np.nan
+    
+    app.PrintPlain("Sample COI values:")
+    for zone in zones:
+        app.PrintPlain(zone + " → " + str(zone_coi[zone][:5]))
+        
+    time_index = results.FindColumn("b:tnow")
+    time = np.array([results.GetValue(i, time_index)[1] for i in range(num_res)], dtype=float)
+    #Find the frequency columns inside ResFile
+    freq = []
+    for zone in zones:
+        freq = zone_coi[zone]
+        # NADIR
+        nadir = np.min(freq)
+        # ROCOF
+        mask = (time >= 1.0) & (time <= 2.0)
+        time_window = time[mask]
+        freq_window = freq[mask]
+    
+        if len(time_window) > 1:
+            dt = np.diff(time_window)
+            df = np.diff(freq_window)
+            rocof = df/dt
+            min_rocof_value = np.min(rocof) if len(rocof) > 0 else np.nan
+        else:
+            min_rocof_value = np.nan
+    
+        # FINAL FREQUENCY
+        final_freq = np.mean(freq[-3:])
+    
+        # OSCILLATIONS
+        peaks, _ = fp(freq, distance=30, prominence=0.005)
+        troughs, _ = fp(-freq, distance=30, prominence=0.005)
+    
+        extremes = np.sort(np.concatenate([peaks, troughs]))
+        extreme_freq = freq[extremes]
+    
+        damping_ratio = np.nan
+        stability = 1
+    
+        if len(extremes) > 4:
+            extreme_freq = extreme_freq[2:]
+            extreme_amp = np.abs(extreme_freq - final_freq)
+    
+            if len(extreme_amp) > 1:
+                log_decrements = []
+                for i in range(len(extreme_amp)-1):
+                    delta = np.log(extreme_amp[i] / (extreme_amp[i+1] + 1e-7))
+                    log_decrements.append(delta)
+    
+                delta_avg = np.mean(log_decrements)
+                damping_ratio = delta_avg / np.sqrt((4*np.pi)**2 + delta_avg**2)
+    
+                if np.max(extreme_amp) < 0.02:
+                    stability = 1
+                else:
+                    stability = 0
+    
+        # SETTLING TIME
+        tol = 0.02
+        settling_time = np.nan
+        count = 0
+    
+        for i in range(len(freq)):
+            if abs(freq[i] - final_freq) <= tol:
+                count += 1
+                if count > 3:
+                    settling_time = time[i]
+            else:
+                count = 0
+    
+        # STORE
+        coi_nadir[zone].append(nadir)
+        coi_rocof[zone].append(min_rocof_value)
+        coi_final[zone].append(final_freq)
+        coi_stability[zone].append(stability)
+        coi_damping[zone].append(damping_ratio)
+        coi_recovery[zone].append(settling_time)
+
+for zone in zones:
+    df_fitted_stable[f"COI Stability {zone}"] = coi_stability[zone]
+    df_fitted_stable[f"COI Steady-State {zone}"] = coi_final[zone]
+    df_fitted_stable[f"COI Nadir {zone}"] = coi_nadir[zone]
+    df_fitted_stable[f"COI Min RoCoF {zone}"] = coi_rocof[zone]
+    df_fitted_stable[f"COI Settling Time {zone}"] = coi_recovery[zone]
+    df_fitted_stable[f"COI Damping {zone}"] = coi_damping[zone]
+    #Append stablity results to a table.
+df_fitted_stable["Q Limit Violation"] = Q_violation
+df_fitted_stable["Load Convergence"] = load_converge
+df_fitted_stable["Init Convergence"] = init_converge
+df_fitted_stable["RMS Convergence"] = RMS_converge
+
+    
+#Print stability results on powerfactory 
+df_fitted_stable.to_csv("Zonal stability Results.csv")
+app.PrintPlain(df_fitted_stable)
+
+
+
+

@@ -132,8 +132,9 @@ app.PrintPlain(df_cap.loc[2])
 gen_df = pd.read_csv("Historic GB data.csv")
 result_df = pd.read_csv("Zonal stability Results - Zone 1.csv")
 #gen_df.drop(gen_df.index[280512:], inplace=True) #drop years 2025
-new_df = gen_df[gen_df['DATETIME'].isin(result_df['DATETIME'])]
 
+new_df = gen_df[(gen_df['DATETIME'].str.startswith("2026"))]
+new_df = new_df[((new_df["SOLAR_perc"] + new_df["WIND_perc"]) >= 45)]
 app.PrintPlain("Total generation rows = " + str(len(gen_df)))
 #247675
 df_fitted = new_df.copy() #Create copies of a dataframes
@@ -572,7 +573,4 @@ df_fitted_stable["RMS Convergence"] = RMS_converge
 #Print stability results on powerfactory 
 df_fitted_stable.to_csv("Zonal stability Results.csv")
 app.PrintPlain(df_fitted_stable)
-
-
-
 

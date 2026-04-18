@@ -130,7 +130,7 @@ app.PrintPlain(df_cap.loc[2])
 
 #Read generator values
 gen_df = pd.read_csv("Historic GB data.csv")
-result_df = pd.read_csv("Zonal stability Results - Zone 1.csv")
+result_df = pd.read_csv("Zonal stability Results - Zone 1 20%.csv")
 #gen_df.drop(gen_df.index[280512:], inplace=True) #drop years 2025
 new_df = gen_df[gen_df['DATETIME'].isin(result_df['DATETIME'])]
 
@@ -163,38 +163,20 @@ app.PrintPlain(str(len(df_fitted)))
 #SETS
 zones = [ "Zone 01", "Zone 04", "Zone 08", "Zone 17", "Zone 28"]
 
-zone_gens = {zone: [] for zone in zones}
-zone_weights = {zone: {} for zone in zones}
-zone_total_weight = {zone: 0.0 for zone in zones}
+system_weights = {}
+system_total_weight = 0.0
 
-coi_nadir = {zone: [] for zone in zones}
-coi_rocof = {zone: [] for zone in zones}
-coi_final = {zone: [] for zone in zones}
-coi_stability = {zone: [] for zone in zones}
-coi_damping = {zone: [] for zone in zones}
-coi_recovery = {zone: [] for zone in zones}
+system_coi_list = []
+system_nadir = []
+system_rocof = []
+system_final = []
+system_damping = []
+system_recovery = []
+system_H_effective = []
 
-for gen in syn_machines:
-    if gen.outserv == 0:
-        try:
-            #term = gen.BB1  # terminal object
-            parent = gen.GetParent()
+system_weights.clear()
 
-            if parent.loc_name in zones:
-                zone_name = parent.loc_name
 
-                zone_gens[zone_name].append(gen)
-
-                H = gen.typ_id.h
-                S = gen.typ_id.sgn
-
-                weight = H * S
-
-                zone_weights[zone_name][gen] = weight
-                zone_total_weight[zone_name] += weight
-        except:
-            continue
-app.PrintPlain(zone_weights)
 freq_columns = []
 BB1 = app.GetCalcRelevantObjects("BB1.1.ElmTerm")
 #GET SELECTED ZONES
@@ -220,23 +202,16 @@ damping = {col: [] for col in freq_columns}
 #Create a new index
 df_fitted = df_fitted.reset_index(drop=True)
 #TEST ALL VALUES
-genTest_df = df_fitted.iloc[100:101]
+genTest_df = df_fitted.iloc[:]
 #GENERATOR SETS
 #RESET ALL GENERATOR OUTPUTS to make active power 0
-df_fitted_stable = df_fitted[100:101].copy() #copy
-
+df_fitted_stable = df_fitted[:].copy() #copy
 results.Clear()
-
-for zone in zones:
-    for gen in zone_weights[zone]:
-        results.AddVariable(gen, "n:fehz:bus1")
-
-# also add time
-results.AddVariable(results, "b:tnow")
 
 #GET FIRST ROW OF GENTEST_DF, set
 for index in range(len(genTest_df)):
-            
+    system_weights.clear()
+    system_total_weight = 0.0
     for gen in syn_machines:
         if "DUMMY GEN" in gen.loc_name:
             continue
@@ -335,6 +310,27 @@ for index in range(len(genTest_df)):
     app.PrintPlain("TOTAL GENERATION= " + str(total_gen))
     
 #PART 2, RUN SIMULATION
+    system_weights.clear()
+    system_total_weight = 0.0
+    
+    for gen in syn_machines:
+        if gen.outserv == 0 and gen.pgini > 0:
+            try:
+                H = gen.typ_id.h
+                S = gen.typ_id.sgn
+    
+                weight = H * S
+    
+                system_weights[gen] = weight
+                system_total_weight += weight
+            except:
+                continue
+    results.Clear()
+    
+    for gen in system_weights:
+        results.AddVariable(gen, "n:fehz:bus1")
+    #Add time variable
+    results.AddVariable(results, "b:tnow")
 
 #RUN LOAD FLOW
     
@@ -363,14 +359,13 @@ for index in range(len(genTest_df)):
         init_converge.append(np.nan)
         RMS_converge.append(np.nan)
         Q_violation.append(np.nan)
-    
-        for col in freq_columns:
-            stability_results[col].append(np.nan)
-            final_frequency[col].append(np.nan)
-            nadir_result[col].append(np.nan)
-            min_rocof[col].append(np.nan)
-            recovery_times[col].append(np.nan)
-            damping[col].append(np.nan)
+        system_H_effective.append(np.nan)
+        system_coi_list.append(np.nan)
+        system_nadir.append(np.nan)
+        system_rocof.append(np.nan)
+        system_final.append(np.nan)
+        system_damping.append(np.nan)
+        system_recovery.append(np.nan)
         continue
     else:
         load_converge.append(int(1))
@@ -395,13 +390,13 @@ for index in range(len(genTest_df)):
     else:
         app.PrintPlain("Initial Conditions didn't work")
         init_converge.append(int(0))
-        for col in freq_columns:
-            stability_results[col].append(np.nan)
-            final_frequency[col].append(np.nan)
-            nadir_result[col].append(np.nan)
-            min_rocof[col].append(np.nan)
-            recovery_times[col].append(np.nan)
-            damping[col].append(np.nan)
+        system_H_effective.append(np.nan)
+        system_coi_list.append(np.nan)
+        system_nadir.append(np.nan)
+        system_rocof.append(np.nan)
+        system_final.append(np.nan)
+        system_damping.append(np.nan)
+        system_recovery.append(np.nan)
         continue
         
     
@@ -415,13 +410,13 @@ for index in range(len(genTest_df)):
     if (RMS != 0):
         app.PrintPlain("ERROR! RMS SIMULATION DID NOT CONVERGE!")
         RMS_converge.append(0)
-        for col in freq_columns:
-            stability_results[col].append(np.nan)
-            final_frequency[col].append(np.nan)
-            nadir_result[col].append(np.nan)
-            min_rocof[col].append(np.nan)
-            recovery_times[col].append(np.nan)
-            damping[col].append(np.nan)
+        system_H_effective.append(np.nan)
+        system_coi_list.append(np.nan)
+        system_nadir.append(np.nan)
+        system_rocof.append(np.nan)
+        system_final.append(np.nan)
+        system_damping.append(np.nan)
+        system_recovery.append(np.nan)
         continue
     else:
         RMS_converge.append(int(1))
@@ -432,116 +427,141 @@ for index in range(len(genTest_df)):
     num_res = results.GetNumberOfRows() #get number of results
     app.PrintPlain("Number of result rows = " + str(num_res))
     gen_col_idx = {}
+    
+    #SYSTEM COI FREQ CALCULATION
+    for gen in system_weights:
+        gen_col_idx[gen] = results.FindColumn(gen, "n:fehz:bus1")
+    
+    system_coi = np.zeros(num_res)
 
-    for zone in zones:
-        for gen in zone_weights[zone]:
-            gen_col_idx[gen] = results.FindColumn(gen, "n:fehz:bus1")  
-        for gen, index in gen_col_idx.items():
-            if index < 0:
-                app.PrintPlain(" Missing freq column: " + str(gen.loc_name))
-            else:
-                app.PrintPlain("Found freq column: " + str(gen.loc_name))
-            app.PrintPlain("Column index = " + str(index))
-    # COMPUTE COI
-    zone_coi = {zone: np.zeros(num_res) for zone in zones}
-    
     for i in range(num_res):
-        for zone in zones:
-            num = 0.0
+        num = 0.0
+        den = 0.0
     
-            for gen, weight in zone_weights[zone].items():
-                f = results.GetValue(i, gen_col_idx[gen])[1]
-                num += weight * f
+        for gen, weight in system_weights.items():
+            idx = gen_col_idx[gen]
+            if idx < 0:
+                continue
+            f = results.GetValue(i, idx)[1]
+            if np.isnan(f):
+                continue    
+            num += weight * f
+            den += weight
     
-            if zone_total_weight[zone] != 0:
-                zone_coi[zone][i] = num / zone_total_weight[zone]
-            else:
-                zone_coi[zone][i] = np.nan
+        system_coi[i] = num / den if den > 0 else np.nan
+        
+    # TOTAL SYSTEM INERTIA
+    P_sync = 0.0
+    P_total = 0.0
+    num = 0.0
+    den_sync = 0.0
     
-    app.PrintPlain("Sample COI values:")
-    for zone in zones:
-        app.PrintPlain(zone + " → " + str(zone_coi[zone][:5]))
+    # synchronous machines
+    for gen in syn_machines:
+        if gen.outserv == 0 and gen.pgini > 0:
+            P_sync += gen.pgini   
+    
+            H = gen.typ_id.h
+            S = gen.typ_id.sgn
+    
+            num += H * S
+            den_sync += S
+    
+    # total generation (sync + static)
+    for gen in syn_machines:
+        if gen.outserv == 0 and gen.pgini > 0:
+            P_total += gen.pgini
+    
+    for gen in stat_machines:
+        if gen.outserv == 0 and gen.pgini > 0:
+            P_total += gen.pgini
+    
+    # Step 1: synchronous inertia
+    H_sync = num / den_sync if den_sync != 0 else np.nan
+    
+    # Step 2: effective system inertia
+    H_sys_eff = (P_sync / P_total) * H_sync if P_total != 0 else np.nan
+    
+    app.PrintPlain("System COI sample → " + str(system_coi[:5]))
         
     time_index = results.FindColumn("b:tnow")
     time = np.array([results.GetValue(i, time_index)[1] for i in range(num_res)], dtype=float)
     #Find the frequency columns inside ResFile
-    freq = []
-    for zone in zones:
-        freq = zone_coi[zone]
-        # NADIR
-        nadir = np.min(freq)
-        # ROCOF
-        mask = (time >= 1.0) & (time <= 2.0)
-        time_window = time[mask]
-        freq_window = freq[mask]
-    
-        if len(time_window) > 1:
-            dt = np.diff(time_window)
-            df = np.diff(freq_window)
-            rocof = df/dt
-            min_rocof_value = np.min(rocof) if len(rocof) > 0 else np.nan
-        else:
-            min_rocof_value = np.nan
-    
-        # FINAL FREQUENCY
-        final_freq = np.mean(freq[-3:])
-    
-        # OSCILLATIONS
-        peaks, _ = fp(freq, distance=30, prominence=0.005)
-        troughs, _ = fp(-freq, distance=30, prominence=0.005)
-    
-        extremes = np.sort(np.concatenate([peaks, troughs]))
-        extreme_freq = freq[extremes]
-    
-        damping_ratio = np.nan
-        stability = 1
-    
-        if len(extremes) > 4:
-            extreme_freq = extreme_freq[2:]
-            extreme_amp = np.abs(extreme_freq - final_freq)
-    
-            if len(extreme_amp) > 1:
-                log_decrements = []
-                for i in range(len(extreme_amp)-1):
-                    delta = np.log(extreme_amp[i] / (extreme_amp[i+1] + 1e-7))
-                    log_decrements.append(delta)
-    
-                delta_avg = np.mean(log_decrements)
-                damping_ratio = delta_avg / np.sqrt((4*np.pi)**2 + delta_avg**2)
-    
-                if np.max(extreme_amp) < 0.02:
-                    stability = 1
-                else:
-                    stability = 0
-    
-        # SETTLING TIME
-        tol = 0.02
-        settling_time = np.nan
-        count = 0
-    
-        for i in range(len(freq)):
-            if abs(freq[i] - final_freq) <= tol:
-                count += 1
-                if count > 3:
-                    settling_time = time[i]
-            else:
-                count = 0
-    
-        # STORE
-        coi_nadir[zone].append(nadir)
-        coi_rocof[zone].append(min_rocof_value)
-        coi_final[zone].append(final_freq)
-        coi_stability[zone].append(stability)
-        coi_damping[zone].append(damping_ratio)
-        coi_recovery[zone].append(settling_time)
+    freq = system_coi
+    # NADIR
+    nadir = np.min(freq)
+    # ROCOF
+    mask = (time >= 1.0) & (time <= 2.0)
+    time_window = time[mask]
+    freq_window = freq[mask]
 
-for zone in zones:
-    df_fitted_stable[f"COI Stability {zone}"] = coi_stability[zone]
-    df_fitted_stable[f"COI Steady-State {zone}"] = coi_final[zone]
-    df_fitted_stable[f"COI Nadir {zone}"] = coi_nadir[zone]
-    df_fitted_stable[f"COI Min RoCoF {zone}"] = coi_rocof[zone]
-    df_fitted_stable[f"COI Settling Time {zone}"] = coi_recovery[zone]
-    df_fitted_stable[f"COI Damping {zone}"] = coi_damping[zone]
+    if len(time_window) > 1:
+        dt = np.diff(time_window)
+        df = np.diff(freq_window)
+        rocof = df/dt
+        min_rocof_value = np.min(rocof) if len(rocof) > 0 else np.nan
+    else:
+        min_rocof_value = np.nan
+
+    # FINAL FREQUENCY
+    final_freq = np.mean(freq[-3:])
+
+    # OSCILLATIONS
+    peaks, _ = fp(freq, distance=30, prominence=0.005)
+    troughs, _ = fp(-freq, distance=30, prominence=0.005)
+
+    extremes = np.sort(np.concatenate([peaks, troughs]))
+    extreme_freq = freq[extremes]
+
+    damping_ratio = np.nan
+    stability = 1
+
+    if len(extremes) > 4:
+        extreme_freq = extreme_freq[2:]
+        extreme_amp = np.abs(extreme_freq - final_freq)
+
+        if len(extreme_amp) > 1:
+            log_decrements = []
+            for i in range(len(extreme_amp)-1):
+                delta = np.log(extreme_amp[i] / (extreme_amp[i+1] + 1e-7))
+                log_decrements.append(delta)
+
+            delta_avg = np.mean(log_decrements)
+            damping_ratio = delta_avg / np.sqrt((4*np.pi)**2 + delta_avg**2)
+
+            if np.max(extreme_amp) < 0.02:
+                stability = 1
+            else:
+                stability = 0
+
+    # SETTLING TIME
+    tol = 0.02
+    settling_time = np.nan
+    count = 0
+
+    for i in range(len(freq)):
+        if abs(freq[i] - final_freq) <= tol:
+            count += 1
+            if count > 3:
+                settling_time = time[i]
+        else:
+            count = 0
+
+    # STORE
+    system_H_effective.append(H_sys_eff)
+    system_coi_list.append(system_coi)
+    system_nadir.append(nadir)
+    system_rocof.append(min_rocof_value)
+    system_final.append(final_freq)
+    system_damping.append(damping_ratio)
+    system_recovery.append(settling_time)
+    
+df_fitted_stable[" Effective Inertia "] = system_H_effective
+df_fitted_stable["COI Nadir"] = system_nadir
+df_fitted_stable["COI RoCoF"] = system_rocof
+df_fitted_stable["COI Final"] = system_final
+df_fitted_stable["COI Damping"] = system_damping
+df_fitted_stable["COI Settling"] = system_recovery
     #Append stablity results to a table.
 df_fitted_stable["Q Limit Violation"] = Q_violation
 df_fitted_stable["Load Convergence"] = load_converge
@@ -552,7 +572,3 @@ df_fitted_stable["RMS Convergence"] = RMS_converge
 #Print stability results on powerfactory 
 df_fitted_stable.to_csv("Zonal stability Results.csv")
 app.PrintPlain(df_fitted_stable)
-
-
-
-
